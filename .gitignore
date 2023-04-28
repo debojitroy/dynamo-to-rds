@@ -24,7 +24,7 @@
 .idea/
 
 # dist
-/api/dist/
+**/dist/**/*
 
 # Local .terraform directories
 **/.terraform/*
