@@ -8,6 +8,14 @@ variable "env" {
   default = "dev"
 }
 
+variable "vpc_id" {
+  type = string
+}
+
+variable "rds_sg_id" {
+  type = string
+}
+
 terraform {
   backend "s3" {}
 
@@ -60,6 +68,56 @@ resource "aws_dynamodb_table" "pg_router_table" {
 ##
 # Start - Preparing the Lambda Function
 ##
+
+# Get the VPC details
+
+data "aws_vpc" "launch_vpc" {
+  id = var.vpc_id
+}
+
+data "aws_subnets" "private" {
+  filter {
+    name   = "vpc-id"
+    values = [var.vpc_id]
+  }
+
+  tags = {
+    Tier = "Private"
+  }
+}
+
+data "aws_subnet" "private_subnets" {
+  for_each = toset(data.aws_subnets.private.ids)
+  id       = each.value
+}
+
+resource "aws_security_group" "lambda_security_group" {
+  vpc_id = var.vpc_id
+
+  ingress {
+    protocol  = -1
+    self      = true
+    from_port = 0
+    to_port   = 0
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_security_group_rule" "allow_lambda_to_rds_sg" {
+  type              = "ingress"
+  description       = "MySQL TLS from sg_lambda"
+  from_port         = 3306
+  to_port           = 3306
+  protocol          = "tcp"
+  source_security_group_id = aws_security_group.lambda_security_group.id
+  security_group_id = var.rds_sg_id
+}
 
 # Base Policy for Lambda
 data "aws_iam_policy_document" "lambda_assume_role" {
@@ -144,6 +202,11 @@ resource "aws_iam_role_policy_attachment" "dynamo_consumer_lambda_stream" {
   policy_arn = aws_iam_policy.dynamodb_consumer_lambda_stream_policy.arn
 }
 
+# Attach VPC Access Role for Lambda
+resource "aws_iam_role_policy_attachment" "iam_role_policy_attachment_lambda_vpc_access_execution" {
+  role       = aws_iam_role.dynamodb_consumer_lambda_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
 
 # Prepare the Archive
 data "archive_file" "dynamodb_consumer_lambda_zip" {
@@ -162,11 +225,18 @@ resource "aws_lambda_function" "dynamodb_consumer_lambda" {
   source_code_hash = data.archive_file.dynamodb_consumer_lambda_zip.output_base64sha256
 
   runtime = "go1.x"
+  timeout = 120
+  memory_size = 512
 
   environment {
     variables = {
       env = var.env
     }
+  }
+
+  vpc_config {
+    security_group_ids =[aws_security_group.lambda_security_group.id]
+    subnet_ids = [for s in data.aws_subnet.private_subnets : s.id]
   }
 
   depends_on = [
