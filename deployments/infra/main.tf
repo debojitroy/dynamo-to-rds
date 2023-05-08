@@ -16,6 +16,17 @@ variable "rds_sg_id" {
   type = string
 }
 
+variable "rds_secret_arn" {
+  type = string
+}
+
+variable "rds_connection_param_name" {
+  type = string
+}
+
+data "aws_region" "default" {}
+data "aws_caller_identity" "default" {}
+
 terraform {
   backend "s3" {}
 
@@ -208,6 +219,62 @@ resource "aws_iam_role_policy_attachment" "iam_role_policy_attachment_lambda_vpc
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
+# Allow Lambda to read RDS Credentials
+data "aws_iam_policy_document" "dynamodb_consumer_lambda_access_rds_secret_cred_statement" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "secretsmanager:DescribeSecret",
+      "secretsmanager:GetSecretValue"
+    ]
+
+    resources = [var.rds_secret_arn]
+  }
+}
+
+resource "aws_iam_policy" "dynamodb_consumer_lambda_access_rds_secret_cred_policy" {
+  name        = "dynamodb_consumer_lambda_access_rds_secret_cred_policy"
+  path        = "/"
+  description = "IAM policy for accessing RDS Credentials from PG Router DynamoDB consumer lambda"
+  policy      = data.aws_iam_policy_document.dynamodb_consumer_lambda_access_rds_secret_cred_statement.json
+}
+
+# Attach to Lambda Policy - Secrets Manager
+resource "aws_iam_role_policy_attachment" "dynamo_consumer_lambda_rds_secret" {
+  role       = aws_iam_role.dynamodb_consumer_lambda_role.name
+  policy_arn = aws_iam_policy.dynamodb_consumer_lambda_access_rds_secret_cred_policy.arn
+}
+
+# Allow Lambda to read RDS Connection String from Params
+data "aws_iam_policy_document" "dynamodb_consumer_lambda_access_rds_conn_param_statement" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "ssm:DescribeParameters",
+      "ssm:GetParameter",
+      "ssm:GetParameters",
+      "ssm:GetParametersByPath"
+    ]
+
+    resources = ["arn:aws:ssm:${data.aws_region.default.name}:${data.aws_caller_identity.default.account_id}:parameter/*"]
+  }
+}
+
+resource "aws_iam_policy" "dynamodb_consumer_lambda_access_rds_conn_param_policy" {
+  name        = "dynamodb_consumer_lambda_access_rds_conn_param_policy"
+  path        = "/"
+  description = "IAM policy for accessing RDS Connection String from PG Router DynamoDB consumer lambda"
+  policy      = data.aws_iam_policy_document.dynamodb_consumer_lambda_access_rds_conn_param_statement.json
+}
+
+# Attach to Lambda Policy - Secrets Manager
+resource "aws_iam_role_policy_attachment" "dynamo_consumer_lambda_rds_conn_param" {
+  role       = aws_iam_role.dynamodb_consumer_lambda_role.name
+  policy_arn = aws_iam_policy.dynamodb_consumer_lambda_access_rds_conn_param_policy.arn
+}
+
 # Prepare the Archive
 data "archive_file" "dynamodb_consumer_lambda_zip" {
   type        = "zip"
@@ -231,6 +298,8 @@ resource "aws_lambda_function" "dynamodb_consumer_lambda" {
   environment {
     variables = {
       env = var.env
+      rds_cred_secrets_arn = var.rds_secret_arn
+      rds_conn_param_name = var.rds_connection_param_name
     }
   }
 
