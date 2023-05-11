@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const recordTtlInHours = 3 * 24 // 3 days
+
 const order = "ORDER"
 
 type OrderInput struct {
@@ -36,6 +38,7 @@ func CreateOrder(config *aws.Config, input *OrderInput) (string, error) {
 	item["status"] = &types.AttributeValueMemberS{Value: input.status}
 	item["created_at"] = &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Unix())}
 	item["updated_at"] = &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Unix())}
+	item["record_ttl"] = &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", time.Now().Add(time.Duration(recordTtlInHours)*time.Hour).Unix())}
 
 	resp, err := services.PutItemInDynamoDB(config, &item)
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"github.com/aws/aws-lambda-go/events"
 	runtime "github.com/aws/aws-lambda-go/lambda"
+	"github.com/debojitroy/dynamo-to-rds/consumer/models"
 	"github.com/debojitroy/dynamo-to-rds/consumer/services"
 	_ "github.com/go-sql-driver/mysql"
 	"log"
@@ -13,8 +14,9 @@ import (
 
 func handleRequest(_ context.Context, event events.DynamoDBEvent) (string, error) {
 	// event
-	eventJson, _ := json.MarshalIndent(event, "", "  ")
-	log.Printf("EVENT: %s", eventJson)
+	eventJson, _ := json.Marshal(event)
+	log.Println("EVENT")
+	log.Println(string(eventJson))
 
 	db, err := services.GetDbConnection()
 
@@ -29,16 +31,15 @@ func handleRequest(_ context.Context, event events.DynamoDBEvent) (string, error
 		}
 	}(db)
 
-	var dateTime string
+	for _, record := range event.Records {
+		_, err := models.ProcessDynamoDbEvent(&record, db)
 
-	err = db.QueryRow("select now()").Scan(&dateTime)
-	if err != nil {
-		log.Fatal(err)
+		if err != nil {
+			log.Fatalf("Failed to process record: %v", err)
+		}
 	}
 
-	log.Printf("Date: %s \n", dateTime)
-
-	return dateTime + ": hello dynamodb", nil
+	return "Successfully processed records", nil
 }
 
 func main() {

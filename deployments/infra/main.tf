@@ -76,6 +76,11 @@ resource "aws_dynamodb_table" "pg_router_table" {
   }
 }
 
+# Create Dead Letter Queue for failed processing
+resource "aws_sqs_queue" "pg_router_consumer_dlq" {
+  message_retention_seconds = 14 * 24 * 3600
+}
+
 ##
 # Start - Preparing the Lambda Function
 ##
@@ -275,6 +280,34 @@ resource "aws_iam_role_policy_attachment" "dynamo_consumer_lambda_rds_conn_param
   policy_arn = aws_iam_policy.dynamodb_consumer_lambda_access_rds_conn_param_policy.arn
 }
 
+# Allow Lambda to publish messages to DLQ
+data "aws_iam_policy_document" "dynamodb_consumer_lambda_access_dlq_statement" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "sqs:GetQueueUrl",
+      "sqs:ListQueues",
+      "sqs:SendMessage"
+    ]
+
+    resources = [aws_sqs_queue.pg_router_consumer_dlq.arn]
+  }
+}
+
+resource "aws_iam_policy" "dynamodb_consumer_lambda_access_dlq_policy" {
+  name        = "dynamodb_consumer_lambda_access_dlq_policy"
+  path        = "/"
+  description = "IAM policy for accessing DLQ from PG Router DynamoDB consumer lambda"
+  policy      = data.aws_iam_policy_document.dynamodb_consumer_lambda_access_dlq_statement.json
+}
+
+# Attach to Lambda Policy - DLQ
+resource "aws_iam_role_policy_attachment" "dynamo_consumer_lambda_dlq" {
+  role       = aws_iam_role.dynamodb_consumer_lambda_role.name
+  policy_arn = aws_iam_policy.dynamodb_consumer_lambda_access_dlq_policy.arn
+}
+
 # Prepare the Archive
 data "archive_file" "dynamodb_consumer_lambda_zip" {
   type        = "zip"
@@ -324,4 +357,10 @@ resource "aws_lambda_event_source_mapping" "pg_router_dynamodb_stream_event_mapp
   event_source_arn  = aws_dynamodb_table.pg_router_table.stream_arn
   function_name     = aws_lambda_function.dynamodb_consumer_lambda.arn
   starting_position = "LATEST"
+  maximum_retry_attempts = 3
+  destination_config {
+    on_failure {
+      destination_arn = aws_sqs_queue.pg_router_consumer_dlq.arn
+    }
+  }
 }
